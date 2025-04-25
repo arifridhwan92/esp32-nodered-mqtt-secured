@@ -8,32 +8,29 @@
 #define VOLTAGE_MAX 3.3
 #define VOLTAGE_MIN 1.55
 
-RTC_DATA_ATTR int bootCount = 0;
-
 WiFiClient espClient;
 PubSubClient client(espClient);
 
-// MQTT credentials
+// MQTT server settings
 const char* mqtt_server = "160.187.97.115";
 const int mqtt_port = 1883;
 const char* mqtt_user = "roboshoptech";
 const char* mqtt_pass = "roboshoptech1234";
-const char* topic = "sensor/analog_percentage/0001";
+const char* topicRoot = "sensor/analog_percentage";
 
-// Sleep time: 30 minutes (in microseconds)
+// Sleep config: 30 minutes
 #define uS_TO_S_FACTOR 1000000ULL
-#define TIME_TO_SLEEP 1800 // seconds (30 min)
+#define TIME_TO_SLEEP 1800
 
-// ===== Custom Device ID for AP Name =====
-String deviceID = "0001"; // Change manually for each device
-String apName = "RoboshopMakesense_" + deviceID;
+// CUSTOM PRODUCT ID 
+String productID = "RoboshopMakesense_0002";
 
 // Map float values
 float mapFloat(float x, float in_min, float in_max, float out_min, float out_max) {
   return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
-// Stable analog read with averaging
+// Stable analog read
 int readStableAnalog(int pin, int samples = 10) {
   long total = 0;
   for (int i = 0; i < samples; i++) {
@@ -60,8 +57,9 @@ void reconnectMQTT() {
   }
 }
 
+// Enter deep sleep
 void goToDeepSleep() {
-  Serial.println("Going to sleep for 30 minutes...");
+  Serial.println("Going to deep sleep for 30 minutes...");
   esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
   esp_deep_sleep_start();
 }
@@ -69,18 +67,18 @@ void goToDeepSleep() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-
   pinMode(BUTTON_PIN, INPUT_PULLUP);
-  ++bootCount;
-  Serial.println("Boot number: " + String(bootCount));
 
-  // WiFi setup
+  // Use product ID as AP name
+  String apName = productID;
+
+  // WiFiManager setup
   WiFiManager wm;
   bool res;
 
   if (digitalRead(BUTTON_PIN) == LOW) {
-    Serial.println("Button pressed - starting WiFi config portal");
-    wm.resetSettings();
+    Serial.println("Button pressed - starting config portal");
+    wm.resetSettings(); // Optional: clear previous WiFi
     res = wm.startConfigPortal(apName.c_str());
     if (!res) {
       Serial.println("Failed to connect. Restarting...");
@@ -93,10 +91,11 @@ void setup() {
   Serial.println("WiFi connected. IP:");
   Serial.println(WiFi.localIP());
 
+  // MQTT connect
   client.setServer(mqtt_server, mqtt_port);
   reconnectMQTT();
 
-  // Read analog and calculate voltage and percentage
+  // Read analog and calculate
   int adcValue = readStableAnalog(ANALOG_PIN);
   float voltage = adcValue * (VOLTAGE_MAX / 4095.0);
   float percentage;
@@ -109,31 +108,35 @@ void setup() {
     percentage = mapFloat(voltage, VOLTAGE_MAX, VOLTAGE_MIN, 0.0, 100.0);
   }
 
-  // Create JSON object
-  StaticJsonDocument<200> doc;
-  doc["device"] = apName;
-  doc["soil_moisture"] = percentage;
+  // Create JSON payload
+  StaticJsonDocument<256> doc;
+  doc["device_id"] = productID;
   doc["voltage"] = voltage;
-  
-  
+  doc["percentage"] = percentage;
 
-  // Serialize JSON to string
   char payload[128];
   serializeJson(doc, payload);
 
-  // Debug print
-  Serial.print("Publishing JSON: ");
+  // Compose MQTT topic
+  String fullTopic = String(topicRoot) + "/" + productID;
+
+  // Debug output
+  Serial.print("Publishing to topic: ");
+  Serial.println(fullTopic);
+  Serial.print("Payload: ");
   Serial.println(payload);
 
-  // Publish JSON payload
-  client.publish(topic, payload);
+  // Send MQTT message
+  client.publish(fullTopic.c_str(), payload);
+  delay(1000);
 
-  delay(1000); // Allow MQTT send time
   client.disconnect();
   WiFi.disconnect(true);
+
+  // Sleep
   goToDeepSleep();
 }
 
 void loop() {
-  // Not used – deep sleep handles everything
+  // Not used
 }
